@@ -1,0 +1,94 @@
+name: Publish Coverage
+description: Publish Coverage to Pages Repository
+
+inputs:
+  repository:
+    description: 'To retrieve with actions/checkout'
+    required: true
+  ssh-key:
+    description: 'For actions/checkout'
+    required: true
+  pages-base-url:
+    description: 'Base url where coverage will appear (defaults to repository-owner.github.io/repository-name)'
+    required: false
+  coverage:
+    description: 'Directory containing coverage to publish'
+    default: cover_db
+  author-name:
+    description: 'Name to use for commit (defaults to actor name)'
+    required: false
+  author-email:
+    description: 'Email to use for commit (defaults to actor email)'
+    required: false
+
+runs:
+  using: composite
+  steps:
+  - name: get coverage repository
+    id: get-coverage-repository
+    if: (success() || failure())
+    uses: actions/checkout@v6
+    with:
+      repository: ${{ inputs.repository }}
+      ssh-key: ${{ inputs.ssh-key }}
+      path: coverage_repository
+  - name: publish coverage
+    shell: bash
+    if: (success() || failure()) && steps.get-coverage-repository.outcome == 'success'
+    continue-on-error: true
+    env:
+      github_pages_base: ${{ inputs.pages-base-url }}
+      coverage_repository: ${{ inputs.repository }}
+      coverage_source: ${{ inputs.coverage }}
+      user_name: ${{ inputs.author-name }}
+      user_email: ${{ inputs.author-email }}
+    run: |
+      : publish coverage
+      export sha=$(git rev-parse HEAD)
+      cd coverage_repository
+      if ! grep -q "$GITHUB_EVENT_NAME" index.html; then
+        perl -pi -e 's#^(\s+)(</ul>)#$1  <li><a href="$ENV{GITHUB_EVENT_NAME}/">$ENV{GITHUB_EVENT_NAME}</a></li>\n$1$2#' index.html
+        git add index.html
+      fi
+      mkdir -p "$GITHUB_EVENT_NAME"
+      if [ ! -e "$GITHUB_EVENT_NAME/index.html" ]; then
+        printf "<html><head><title>check-spelling coverage for $GITHUB_EVENT_NAME</title></head>\n<body>\n  <h1>check-spelling coverage for $GITHUB_EVENT_NAME</h1>\n  <ul>\n  </ul>\n</body></html>\n" > "$GITHUB_EVENT_NAME/index.html"
+        git add "$GITHUB_EVENT_NAME/index.html"
+      fi
+      cd "$GITHUB_EVENT_NAME"
+      if ! grep -q "$sha" index.html; then
+        date="$(date)" \
+        perl -pi -e 's#^(\s*)(<ul>)#$1$2\n$1  <li><a href="$ENV{sha}/">$ENV{date} ($ENV{sha})</a></li>#' index.html
+        git add index.html
+      fi
+      mkdir -p "$sha"
+      cd "$sha"
+
+      if [[ "$coverage_source" == /* ]]; then
+        source_directory="$coverage_source"
+      else
+        source_directory="$GITHUB_WORKSPACE/$coverage_source"
+      fi
+      cp -r "$source_directory"/* .
+      if [ ! -e index.html ] && [ -e coverage.html ]; then
+        mv coverage.html index.html
+      fi
+      git add .
+      if [ -z "$user_name" ]; then
+        user_name=$(curl -s "$GITHUB_API_URL/users/$GITHUB_ACTOR" | jq -r '.name // empty')
+        if [ -z "$user_name" ]; then
+          user_name="$GITHUB_ACTOR"
+        fi
+      fi
+      if [ -z "$user_email" ]; then
+        user_email="$GITHUB_ACTOR_ID+$GITHUB_ACTOR@users.noreply.github.com"
+      fi
+      git \
+        -c user.email="$user_email" \
+        -c user.name="$user_name" \
+        commit -m "Publish coverage for $GITHUB_REPOSITORY@$sha ($GITHUB_EVENT_NAME)"
+      git push origin HEAD
+      if [ -z "$github_pages_base" ]; then
+        github_pages_base="https://${coverage_repository%%/*}.github.io/${coverage_repository##*/}"
+      fi
+      echo "Publishing [Coverage Report]($github_pages_base/$GITHUB_EVENT_NAME/$sha/) (if the link isn't ready, check [$coverage_repository actions for status]($GITHUB_SERVER_URL/$coverage_repository/actions/workflows/pages.yml))" >> "$GITHUB_STEP_SUMMARY"
