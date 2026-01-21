@@ -1,5 +1,7 @@
 # publish-coverage
 
+publish-coverage creates a branch in a coverage repository
+
 ## inputs
 
 Name | Description | Default
