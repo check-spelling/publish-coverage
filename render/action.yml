@@ -1,0 +1,73 @@
+name: Render Coverage
+description: Render Coverage in Pages Repository
+
+inputs:
+  repository:
+    description: 'Source repository for coverage'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Collate coverage
+      env:
+        repository: ${{ inputs.repository }}
+      shell: bash
+      run: |
+        : Collate coverage
+        git checkout --orphan=pages
+        git checkout main -- index.html
+        for a in $(
+          git ls-remote . |
+          perl -ne '
+            next unless s,.*/(ref-),$1,;
+            print;
+          '
+        ); do
+          export event=$(echo "$a" | perl -pe 's/ref-(.*?)-.*/$1/')
+          export ref=$(echo "$a" | perl -pe 's/.*-//')
+          git checkout origin/$a -- "$event/$ref" || true
+          echo "$event" >> /tmp/events
+        done
+        for event in $(sort -u /tmp/events); do
+          export event
+          if ! grep -q "$event" index.html; then
+            perl -pi -e 's#^(\s+)(</ul>)#$1  <li><a href="$ENV{event}/">$ENV{event}</a></li>\n$1$2#' index.html
+          fi
+          (
+            cd "$event";
+            find . -mindepth 1 -maxdepth 1 -type d -print0
+          ) | perl -e '
+          $/="\0";
+          my $event=$ENV{event};
+          my $repository=$ENV{repository};
+
+          print qq{<html>
+          <head><title>$repository coverage for $event</title>
+          <style>
+          body {
+            font-family: sans-serif;
+          }
+          </style></head>
+          <body>
+            <h1>$repository coverage for $event</h1>
+            <ul>
+          };
+          my %list;
+          for my $ref (<>) {
+            chomp $ref;
+            $ref =~ s!.*/!!;
+            my $date=`git log -1 "origin/ref-$event-$ref" --pretty="%ai"`;
+            chomp $date;
+            my $key="$date ($ref)";
+            my $entry=qq{<a href="$ref/">$key</a>};
+            $list{$key} = $entry;
+          }
+          for my $key (reverse sort keys %list) {
+            print "    <li>$list{$key}</li>\n";
+          }
+          print qq{  </ul>
+          </body>
+          };
+          ' > $event/index.html
+        done
